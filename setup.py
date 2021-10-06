@@ -201,7 +201,7 @@ atlas = [
 ]
 azure = [
     'azure-batch>=8.0.0',
-    'azure-cosmos>=3.0.1,<4',
+    'azure-cosmos>=4.0.0,<5',
     'azure-datalake-store>=0.0.45',
     'azure-identity>=1.3.1',
     'azure-keyvault>=4.1.0',
@@ -280,7 +280,10 @@ flask_appbuilder_authlib = [
 ]
 google = [
     'PyOpenSSL',
-    'google-ads>=12.0.0',
+    # The Google Ads 14.0.1 breaks PIP and eager upgrade as it requires
+    # google-api-core>=2.0.0 which cannot be used yet (see below comment)
+    # and https://github.com/apache/airflow/issues/18705#issuecomment-933746150
+    'google-ads>=12.0.0,<14.0.1',
     # Maintainers, please do not require google-api-core>=2.x.x
     # Until this issue is closed
     # https://github.com/googleapis/google-cloud-python/issues/10566
@@ -350,6 +353,7 @@ http = [
 http_provider = [
     'apache-airflow-providers-http',
 ]
+influxdb = ['pandas>=0.17.1, <2.0', 'influxdb-client>=1.19.0']
 jdbc = [
     'jaydebeapi>=1.1.1',
 ]
@@ -461,7 +465,7 @@ spark = [
 ssh = [
     'paramiko>=2.6.0',
     'pysftp>=0.2.9',
-    'sshtunnel>=0.1.4,<0.2',
+    'sshtunnel>=0.3.2,<0.5',
 ]
 statsd = [
     'statsd>=3.3.0, <4.0',
@@ -575,6 +579,7 @@ PROVIDERS_REQUIREMENTS: Dict[str, List[str]] = {
     'hashicorp': hashicorp,
     'http': http,
     'imap': [],
+    'influxdb': influxdb,
     'jdbc': jdbc,
     'jenkins': jenkins,
     'jira': jira,
@@ -747,6 +752,7 @@ ALL_DB_PROVIDERS = [
     'apache.pinot',
     'cloudant',
     'exasol',
+    'influxdb',
     'microsoft.mssql',
     'mongo',
     'mysql',
