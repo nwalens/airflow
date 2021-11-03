@@ -21,6 +21,18 @@ from airflow.www.security import EXISTING_ROLES
 
 
 @contextmanager
+def create_test_client(app, user_name, role_name, permissions):
+    """
+    Helper function to create a client with a temporary user which will be deleted once done
+    """
+    client = app.test_client()
+    with create_user_scope(app, username=user_name, role_name=role_name, permissions=permissions) as _:
+        resp = client.post("/login/", data={"username": user_name, "password": user_name})
+        assert resp.status_code == 302
+        yield client
+
+
+@contextmanager
 def create_user_scope(app, username, **kwargs):
     """
     Helper function designed to be used with pytest fixture mainly.
@@ -64,7 +76,7 @@ def create_role(app, name, permissions=None):
         permissions = []
     for permission in permissions:
         perm_object = appbuilder.sm.get_permission(*permission)
-        appbuilder.sm.add_permission_role(role, perm_object)
+        appbuilder.sm.add_permission_to_role(role, perm_object)
     return role
 
 

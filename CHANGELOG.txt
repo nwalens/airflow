@@ -1,3 +1,47 @@
+Airflow 2.2.1, 2021-10-29
+-------------------------
+
+Bug Fixes
+"""""""""
+
+- Fix Unexpected commit error in schedulerjob (#19213)
+- Add DagRun.logical_date as a property (#19198)
+- Clear ti.next_method and ti.next_kwargs on task finish (#19183)
+- Faster PostgreSQL db migration to Airflow 2.2 (#19166)
+- Remove incorrect type comment in ``Swagger2Specification._set_defaults`` classmethod (#19065)
+- Add TriggererJob to jobs check command (#19179, #19185)
+- Hide tooltip when next run is ``None`` (#19112)
+- Crerate TI context with data interval compat layer (#19148)
+- Fix queued dag runs changes ``catchup=False`` behaviour (#19130, #19145)
+- add detailed information to logging when a dag or a task finishes. (#19097)
+- Warn about unsupported Python 3.10 (#19060)
+- Fix catchup by limiting queued dagrun creation using ``max_active_runs`` (#18897)
+- Prevent scheduler crash when serialized dag is missing (#19113)
+- Don't install SQLAlchemy/Pendulum adapters for other DBs (#18745)
+- Workaround libstdcpp TLS error (#19010)
+- Change `ds`, `ts`, etc. back to use logical date (#19088)
+- Ensure task state doesn't change when marked as failed/success/skipped (#19095)
+- Relax packaging requirement (#19087)
+- Rename trigger page label to Logical Date (#19061)
+- Allow Param to support a default value of ``None`` (#19034)
+- Upgrade old DAG/task param format when deserializing from the DB (#18986)
+- Don't bake ENV and _cmd into tmp config for non-sudo (#18772)
+- CLI: Fail ``backfill`` command before loading DAGs if missing args (#18994)
+- BugFix: Null execution date on insert to ``task_fail`` violating NOT NULL (#18979)
+- Try to move "dangling" rows in upgradedb (#18953)
+- Row lock TI query in ``SchedulerJob._process_executor_events`` (#18975)
+- Sentry before send fallback (#18980)
+- Fix ``XCom.delete`` error in Airflow 2.2.0 (#18956)
+- Check python version before starting triggerer (#18926)
+
+Doc only changes
+""""""""""""""""
+
+- Update access control documentation for TaskInstances and DagRuns (#18644)
+- Add information about keepalives for managed Postgres (#18850)
+- Doc: Add Callbacks Section to Logging & Monitoring (#18842)
+- Group PATCH DAGrun together with other DAGRun endpoints (#18885)
+
 Airflow 2.2.0, 2021-10-11
 -------------------------
 
@@ -272,7 +316,7 @@ Doc only changes
 - Docs: Fix url for ``Elasticsearch`` (#16275)
 - Small improvements for README.md files (#16244)
 - Fix docs for ``dag_concurrency`` (#16177)
-- Check syntatic correctness for code-snippets (#16005)
+- Check syntactic correctness for code-snippets (#16005)
 - Improvements for Docker Image docs (#14843)
 - Add proper link for wheel packages in docs. (#15999)
 - Add Docs for ``default_pool`` slots (#15997)
@@ -295,7 +339,7 @@ Misc/Internal
 - Update ``boto3`` to ``<1.19`` (#18389)
 - Improve coverage for ``airflow.security.kerberos module`` (#18258)
 - Fix kinesis test (#18337)
-- Fix provider test acessing importlib-resources (#18228)
+- Fix provider test accessing importlib-resources (#18228)
 - Silence warnings in tests from using SubDagOperator (#18275)
 - Fix usage of ``range(len())`` to ``enumerate`` (#18174)
 - Test coverage on the autocomplete view (#15943)
@@ -2175,7 +2219,7 @@ Bug fixes
 - [AIRFLOW-4763] Allow list in DockerOperator.command (#5408)
 - [AIRFLOW-5260] Allow empty uri arguments in connection strings (#5855)
 - [AIRFLOW-5257] Fix ElasticSearch log handler errors when attempting to close logs (#5863)
-- [AIRFLOW-1772] Google Updated Sensor doesnt work with CRON expressions (#5730)
+- [AIRFLOW-1772] Google Updated Sensor doesn't work with CRON expressions (#5730)
 - [AIRFLOW-5085] When you run kubernetes git-sync test from TAG, it fails (#5699)
 - [AIRFLOW-5258] ElasticSearch log handler, has 2 times of hours (%H and %I) in _clean_execution_dat (#5864)
 - [AIRFLOW-5348] Escape Label in deprecated chart view when set via JS (#5952)
@@ -3263,7 +3307,7 @@ Bug fixes
 - [AIRFLOW-3072] Only admin can view logs in RBAC UI
 - [AIRFLOW-3079] Improve initdb to support MSSQL Server
 - [AIRFLOW-3089] Google auth doesn't work under http
-- [AIRFLOW-3099] Errors raised when some blocs are missing in airflow.cfg
+- [AIRFLOW-3099] Errors raised when some blocks are missing in airflow.cfg
 - [AIRFLOW-3109] Default user permission should contain 'can_clear'
 - [AIRFLOW-3111] Confusing comments and instructions for log templates in UPDATING.md and default_airflow.cfg
 - [AIRFLOW-3124] Broken webserver debug mode (RBAC)

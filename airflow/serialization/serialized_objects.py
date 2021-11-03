@@ -149,7 +149,7 @@ def _encode_timetable(var: Timetable) -> Dict[str, Any]:
     importable_string = as_importable_string(timetable_class)
     if _get_registered_timetable(importable_string) != timetable_class:
         raise _TimetableNotRegistered(importable_string)
-    return {"__type": importable_string, "__var": var.serialize()}
+    return {Encoding.TYPE: importable_string, Encoding.VAR: var.serialize()}
 
 
 def _decode_timetable(var: Dict[str, Any]) -> Timetable:
@@ -158,11 +158,11 @@ def _decode_timetable(var: Dict[str, Any]) -> Timetable:
     Most of the deserialization logic is delegated to the actual type, which
     we import from string.
     """
-    importable_string = var["__type"]
+    importable_string = var[Encoding.TYPE]
     timetable_class = _get_registered_timetable(importable_string)
     if timetable_class is None:
         raise _TimetableNotRegistered(importable_string)
-    return timetable_class.deserialize(var["__var"])
+    return timetable_class.deserialize(var[Encoding.VAR])
 
 
 class BaseSerialization:
@@ -270,8 +270,8 @@ class BaseSerialization:
                 serialized_object[key] = _encode_timetable(value)
             else:
                 value = cls._serialize(value)
-                if isinstance(value, dict) and "__type" in value:
-                    value = value["__var"]
+                if isinstance(value, dict) and Encoding.TYPE in value:
+                    value = value[Encoding.VAR]
                 serialized_object[key] = value
         return serialized_object
 
@@ -409,6 +409,34 @@ class BaseSerialization:
             return True
         return False
 
+    @classmethod
+    def _serialize_params_dict(cls, params: ParamsDict):
+        """Serialize Params dict for a DAG/Task"""
+        serialized_params = {}
+        for k, v in params.items():
+            # TODO: As of now, we would allow serialization of params which are of type Param only
+            if f'{v.__module__}.{v.__class__.__name__}' == 'airflow.models.param.Param':
+                kwargs = v.dump()
+                kwargs['default'] = kwargs.pop('value')
+                serialized_params[k] = kwargs
+            else:
+                raise ValueError('Params to a DAG or a Task can be only of type airflow.models.param.Param')
+        return serialized_params
+
+    @classmethod
+    def _deserialize_params_dict(cls, encoded_params: Dict) -> ParamsDict:
+        """Deserialize a DAGs Params dict"""
+        op_params = {}
+        for k, v in encoded_params.items():
+            if isinstance(v, dict) and "__class" in v:
+                param_class = import_string(v['__class'])
+                op_params[k] = param_class(**v)
+            else:
+                # Old style params, upgrade it
+                op_params[k] = Param(v)
+
+        return ParamsDict(op_params)
+
 
 class DependencyDetector:
     """Detects dependencies between DAGs."""
@@ -517,7 +545,7 @@ class SerializedBaseOperator(BaseOperator, BaseSerialization):
                     serialize_op[template_field] = serialize_template_field(value)
 
         if op.params:
-            serialize_op['params'] = cls._serialize_operator_params(op.params)
+            serialize_op['params'] = cls._serialize_params_dict(op.params)
 
         return serialize_op
 
@@ -584,7 +612,7 @@ class SerializedBaseOperator(BaseOperator, BaseSerialization):
             elif k == "deps":
                 v = cls._deserialize_deps(v)
             elif k == "params":
-                v = cls._deserialize_operator_params(v)
+                v = cls._deserialize_params_dict(v)
             elif k in cls._decorated_fields or k not in op.get_serialized_fields():
                 v = cls._deserialize(v)
             # else use v as it is
@@ -711,38 +739,13 @@ class SerializedBaseOperator(BaseOperator, BaseSerialization):
             op_link_arguments = cattr.unstructure(operator_extra_link)
             if not isinstance(op_link_arguments, dict):
                 op_link_arguments = {}
-            serialize_operator_extra_links.append(
-                {
-                    "{}.{}".format(
-                        operator_extra_link.__class__.__module__, operator_extra_link.__class__.__name__
-                    ): op_link_arguments
-                }
+
+            module_path = (
+                f"{operator_extra_link.__class__.__module__}.{operator_extra_link.__class__.__name__}"
             )
+            serialize_operator_extra_links.append({module_path: op_link_arguments})
 
         return serialize_operator_extra_links
-
-    @classmethod
-    def _deserialize_operator_params(cls, encoded_op_params: Dict) -> Dict[str, Param]:
-        """Deserialize Params dict of a operator"""
-        op_params = {}
-        for k, v in encoded_op_params.items():
-            param_class = import_string(v['__class'])
-            del v['__class']
-            op_params[k] = param_class(**v)
-
-        return ParamsDict(op_params)
-
-    @classmethod
-    def _serialize_operator_params(cls, op_params: ParamsDict):
-        """Serialize Params dict of a operator"""
-        serialized_params = {}
-        for k, v in op_params.items():
-            # TODO: As of now, we would allow serialization of params which are of type Param only
-            if f'{v.__module__}.{v.__class__.__name__}' == 'airflow.models.param.Param':
-                serialized_params[k] = v.dump()
-            else:
-                raise ValueError('Params to a Task can be only of type airflow.models.param.Param')
-        return serialized_params
 
 
 class SerializedDAG(DAG, BaseSerialization):
@@ -783,33 +786,33 @@ class SerializedDAG(DAG, BaseSerialization):
     def serialize_dag(cls, dag: DAG) -> dict:
         """Serializes a DAG into a JSON object."""
         try:
-            serialize_dag = cls.serialize_to_json(dag, cls._decorated_fields)
+            serialized_dag = cls.serialize_to_json(dag, cls._decorated_fields)
 
             # If schedule_interval is backed by timetable, serialize only
             # timetable; vice versa for a timetable backed by schedule_interval.
             if dag.timetable.summary == dag.schedule_interval:
-                del serialize_dag["schedule_interval"]
+                del serialized_dag["schedule_interval"]
             else:
-                del serialize_dag["timetable"]
+                del serialized_dag["timetable"]
 
-            serialize_dag["tasks"] = [cls._serialize(task) for _, task in dag.task_dict.items()]
-            serialize_dag["dag_dependencies"] = [
+            serialized_dag["tasks"] = [cls._serialize(task) for _, task in dag.task_dict.items()]
+            serialized_dag["dag_dependencies"] = [
                 vars(t)
                 for t in (SerializedBaseOperator.detect_dependencies(task) for task in dag.task_dict.values())
                 if t is not None
             ]
-            serialize_dag['_task_group'] = SerializedTaskGroup.serialize_task_group(dag.task_group)
+            serialized_dag['_task_group'] = SerializedTaskGroup.serialize_task_group(dag.task_group)
 
             # Edge info in the JSON exactly matches our internal structure
-            serialize_dag["edge_info"] = dag.edge_info
-            serialize_dag["params"] = cls._serialize_dag_params(dag.params)
+            serialized_dag["edge_info"] = dag.edge_info
+            serialized_dag["params"] = cls._serialize_params_dict(dag.params)
 
             # has_on_*_callback are only stored if the value is True, as the default is False
             if dag.has_on_success_callback:
-                serialize_dag['has_on_success_callback'] = True
+                serialized_dag['has_on_success_callback'] = True
             if dag.has_on_failure_callback:
-                serialize_dag['has_on_failure_callback'] = True
-            return serialize_dag
+                serialized_dag['has_on_failure_callback'] = True
+            return serialized_dag
         except SerializationError:
             raise
         except Exception as e:
@@ -843,7 +846,7 @@ class SerializedDAG(DAG, BaseSerialization):
             elif k in cls._decorated_fields:
                 v = cls._deserialize(v)
             elif k == "params":
-                v = cls._deserialize_dag_params(v)
+                v = cls._deserialize_params_dict(v)
             # else use v as it is
 
             setattr(dag, k, v)
@@ -915,35 +918,12 @@ class SerializedDAG(DAG, BaseSerialization):
             raise ValueError(f"Unsure how to deserialize version {ver!r}")
         return cls.deserialize_dag(serialized_obj['dag'])
 
-    @classmethod
-    def _serialize_dag_params(cls, dag_params: ParamsDict):
-        """Serialize Params dict for a DAG"""
-        serialized_params = {}
-        for k, v in dag_params.items():
-            # TODO: As of now, we would allow serialization of params which are of type Param only
-            if f'{v.__module__}.{v.__class__.__name__}' == 'airflow.models.param.Param':
-                serialized_params[k] = v.dump()
-            else:
-                raise ValueError('Params to a DAG can be only of type airflow.models.param.Param')
-        return serialized_params
-
-    @classmethod
-    def _deserialize_dag_params(cls, encoded_dag_params: Dict) -> ParamsDict:
-        """Deserialize a DAGs Params dict"""
-        op_params = {}
-        for k, v in encoded_dag_params.items():
-            param_class = import_string(v['__class'])
-            del v['__class']
-            op_params[k] = param_class(**v)
-
-        return ParamsDict(op_params)
-
 
 class SerializedTaskGroup(TaskGroup, BaseSerialization):
     """A JSON serializable representation of TaskGroup."""
 
     @classmethod
-    def serialize_task_group(cls, task_group: TaskGroup) -> Optional[Union[Dict[str, Any]]]:
+    def serialize_task_group(cls, task_group: TaskGroup) -> Optional[Dict[str, Any]]:
         """Serializes TaskGroup into a JSON object."""
         if not task_group:
             return None

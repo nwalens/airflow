@@ -523,7 +523,7 @@ class TestStringifiedDAGs:
         if isinstance(task.params, ParamsDict):
             assert serialized_task.params.dump() == task.params.dump()
 
-        # Check that for Deserialised task, task.subdag is None for all other Operators
+        # Check that for Deserialized task, task.subdag is None for all other Operators
         # except for the SubDagOperator where task.subdag is an instance of DAG object
         if task.task_type == "SubDagOperator":
             assert serialized_task.subdag is not None
@@ -1431,6 +1431,41 @@ class TestStringifiedDAGs:
         if isinstance(serialized_obj, dict) and "__type" in serialized_obj:
             serialized_obj = serialized_obj["__var"]
         assert serialized_obj == expected_output
+
+    def test_params_upgrade(self):
+        serialized = {
+            "__version": 1,
+            "dag": {
+                "_dag_id": "simple_dag",
+                "fileloc": __file__,
+                "tasks": [],
+                "timezone": "UTC",
+                "params": {"none": None, "str": "str", "dict": {"a": "b"}},
+            },
+        }
+        SerializedDAG.validate_schema(serialized)
+        dag = SerializedDAG.from_dict(serialized)
+
+        assert dag.params["none"] is None
+        assert isinstance(dict.__getitem__(dag.params, "none"), Param)
+        assert dag.params["str"] == "str"
+
+    def test_params_serialize_default(self):
+        serialized = {
+            "__version": 1,
+            "dag": {
+                "_dag_id": "simple_dag",
+                "fileloc": __file__,
+                "tasks": [],
+                "timezone": "UTC",
+                "params": {"str": {"__class": "airflow.models.param.Param", "default": "str"}},
+            },
+        }
+        SerializedDAG.validate_schema(serialized)
+        dag = SerializedDAG.from_dict(serialized)
+
+        assert isinstance(dict.__getitem__(dag.params, "str"), Param)
+        assert dag.params["str"] == "str"
 
 
 def test_kubernetes_optional():

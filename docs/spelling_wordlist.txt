@@ -400,6 +400,7 @@ Zsh
 Zymergen
 abc
 accessor
+aci
 ack
 ackIds
 acknowledgement
@@ -407,6 +408,7 @@ actionCard
 acyclic
 adhoc
 adls
+afterall
 airbnb
 airbyte
 airflowignore
@@ -505,6 +507,7 @@ bq
 bugfix
 bugfixes
 buildType
+burstable
 bytestring
 cacert
 callables
@@ -527,6 +530,7 @@ changelog
 charset
 checklicence
 checksums
+childs
 chmod
 chown
 ci
@@ -570,6 +574,7 @@ configs
 conftest
 conn
 connectTimeoutMS
+connexion
 containerConfiguration
 contentUrl
 contextmgr
@@ -873,6 +878,7 @@ ish
 isn
 iterable
 iteratively
+iterm
 itertools
 izip
 javascript
@@ -1109,6 +1115,7 @@ psrp
 psycopg
 pty
 pubsub
+pullrequest
 py
 pyMongo
 pyarrow
@@ -1214,6 +1221,7 @@ sharded
 shellcheck
 shellcmd
 shm
+sie
 sigv
 skipable
 sku
@@ -1291,6 +1299,7 @@ sudo
 sudoers
 summarization
 superclass
+sur
 svg
 swp
 symlink

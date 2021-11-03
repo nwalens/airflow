@@ -62,16 +62,17 @@ def _trigger_dag(
         min_dag_start_date = dag.default_args["start_date"]
         if min_dag_start_date and execution_date < min_dag_start_date:
             raise ValueError(
-                "The execution_date [{}] should be >= start_date [{}] from DAG's default_args".format(
-                    execution_date.isoformat(), min_dag_start_date.isoformat()
-                )
+                f"The execution_date [{execution_date.isoformat()}] should be >= start_date "
+                f"[{min_dag_start_date.isoformat()}] from DAG's default_args"
             )
 
     run_id = run_id or DagRun.generate_run_id(DagRunType.MANUAL, execution_date)
-    dag_run = DagRun.find(dag_id=dag_id, run_id=run_id)
+    dag_run = DagRun.find_duplicate(dag_id=dag_id, execution_date=execution_date, run_id=run_id)
 
     if dag_run:
-        raise DagRunAlreadyExists(f"Run id {run_id} already exists for dag id {dag_id}")
+        raise DagRunAlreadyExists(
+            f"A Dag Run already exists for dag id {dag_id} at {execution_date} with run id {run_id}"
+        )
 
     run_conf = None
     if conf:

@@ -82,7 +82,7 @@ from pendulum.datetime import DateTime
 from pendulum.parsing.exceptions import ParserError
 from pygments import highlight, lexers
 from pygments.formatters import HtmlFormatter
-from sqlalchemy import Date, and_, desc, func, union_all
+from sqlalchemy import Date, and_, desc, func, inspect, union_all
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import joinedload
 from wtforms import SelectField, validators
@@ -276,8 +276,8 @@ def task_group_to_dict(task_group):
             'rx': 5,
             'ry': 5,
             'clusterLabelPos': 'top',
+            'tooltip': task_group.tooltip,
         },
-        'tooltip': task_group.tooltip,
         'children': children,
     }
 
@@ -692,10 +692,21 @@ class Airflow(AirflowBaseView):
             fm for fm in settings.DASHBOARD_UIALERTS if fm.should_show(current_app.appbuilder.sm)
         ]
 
+        def _iter_parsed_moved_data_table_names():
+            for table_name in inspect(session.get_bind()).get_table_names():
+                segments = table_name.split("__", 2)
+                if len(segments) < 3:
+                    continue
+                if segments[0] != settings.AIRFLOW_MOVED_TABLE_PREFIX:
+                    continue
+                # Second segment is a version marker that we don't need to show.
+                yield segments[2], table_name
+
         return self.render_template(
             'airflow/dags.html',
             dags=dags,
             dashboard_alerts=dashboard_alerts,
+            migration_moved_data_alerts=sorted(set(_iter_parsed_moved_data_table_names())),
             current_page=current_page,
             search_query=arg_search_query if arg_search_query else '',
             page_title=page_title,
@@ -1189,8 +1200,8 @@ class Airflow(AirflowBaseView):
             execution_date = timezone.parse(execution_date)
         except ValueError:
             error_message = (
-                'Given execution date, {}, could not be identified '
-                'as a date. Example date format: 2015-11-16T14:34:15+00:00'.format(execution_date)
+                f'Given execution date, {execution_date}, could not be identified as a date. '
+                'Example date format: 2015-11-16T14:34:15+00:00'
             )
             response = jsonify({'error': error_message})
             response.status_code = 400
@@ -1560,8 +1571,7 @@ class Airflow(AirflowBaseView):
         if failed_deps:
             failed_deps_str = ", ".join(f"{dep.dep_name}: {dep.reason}" for dep in failed_deps)
             flash(
-                "Could not queue task instance for execution, dependencies not met: "
-                "{}".format(failed_deps_str),
+                f"Could not queue task instance for execution, dependencies not met: {failed_deps_str}",
                 "error",
             )
             return redirect(origin)
@@ -2853,6 +2863,7 @@ class Airflow(AirflowBaseView):
             task_dict['end_date'] = task_dict['end_date'] or timezone.utcnow()
             task_dict['extraLinks'] = dag.get_task(ti.task_id).extra_links
             task_dict['try_number'] = try_count
+            task_dict['execution_date'] = dttm
             tasks.append(task_dict)
 
         tf_count = 0
@@ -2874,6 +2885,7 @@ class Airflow(AirflowBaseView):
             task_dict['operator'] = task.task_type
             task_dict['try_number'] = try_count
             task_dict['extraLinks'] = task.extra_links
+            task_dict['execution_date'] = dttm
             tasks.append(task_dict)
 
         task_names = [ti.task_id for ti in tis]
@@ -3220,6 +3232,11 @@ class SlaMissModelView(AirflowModelView):
     ]
 
     list_columns = ['dag_id', 'task_id', 'execution_date', 'email_sent', 'timestamp']
+
+    label_columns = {
+        'execution_date': 'Logical Date',
+    }
+
     add_columns = ['dag_id', 'task_id', 'execution_date', 'email_sent', 'timestamp']
     edit_columns = ['dag_id', 'task_id', 'execution_date', 'email_sent', 'timestamp']
     search_columns = ['dag_id', 'task_id', 'email_sent', 'timestamp', 'execution_date']
@@ -3255,6 +3272,10 @@ class XComModelView(AirflowModelView):
         permissions.ACTION_CAN_DELETE,
         permissions.ACTION_CAN_ACCESS_MENU,
     ]
+
+    label_columns = {
+        'execution_date': 'Logical Date',
+    }
 
     search_columns = ['key', 'value', 'timestamp', 'execution_date', 'task_id', 'dag_id']
     list_columns = ['key', 'value', 'timestamp', 'execution_date', 'task_id', 'dag_id']
@@ -3932,6 +3953,9 @@ class DagRunModelView(AirflowPrivilegeVerifierModelView):
         'end_date',
         'external_trigger',
     ]
+    label_columns = {
+        'execution_date': 'Logical Date',
+    }
     edit_columns = ['state', 'dag_id', 'execution_date', 'start_date', 'end_date', 'run_id', 'conf']
 
     base_order = ('execution_date', 'desc')
@@ -3997,10 +4021,7 @@ class DagRunModelView(AirflowPrivilegeVerifierModelView):
                     current_app.dag_bag.get_dag(dr.dag_id), dr.execution_date, commit=True, session=session
                 )
             altered_ti_count = len(altered_tis)
-            flash(
-                "{count} dag runs and {altered_ti_count} task instances "
-                "were set to failed".format(count=count, altered_ti_count=altered_ti_count)
-            )
+            flash(f"{count} dag runs and {altered_ti_count} task instances were set to failed")
         except Exception:
             flash('Failed to set state', 'error')
         return redirect(self.get_default_url())
@@ -4024,10 +4045,7 @@ class DagRunModelView(AirflowPrivilegeVerifierModelView):
                     current_app.dag_bag.get_dag(dr.dag_id), dr.execution_date, commit=True, session=session
                 )
             altered_ti_count = len(altered_tis)
-            flash(
-                "{count} dag runs and {altered_ti_count} task instances "
-                "were set to success".format(count=count, altered_ti_count=altered_ti_count)
-            )
+            flash(f"{count} dag runs and {altered_ti_count} task instances were set to success")
         except Exception:
             flash('Failed to set state', 'error')
         return redirect(self.get_default_url())
@@ -4076,6 +4094,10 @@ class LogModelView(AirflowModelView):
     list_columns = ['id', 'dttm', 'dag_id', 'task_id', 'event', 'execution_date', 'owner', 'extra']
     search_columns = ['dag_id', 'task_id', 'event', 'execution_date', 'owner', 'extra']
 
+    label_columns = {
+        'execution_date': 'Logical Date',
+    }
+
     base_order = ('dttm', 'desc')
 
     base_filters = [['dag_id', DagFilter, lambda: []]]
@@ -4119,7 +4141,7 @@ class TaskRescheduleModelView(AirflowModelView):
     ]
 
     label_columns = {
-        'dag_run.execution_date': 'Execution Date',
+        'dag_run.execution_date': 'Logical Date',
     }
 
     search_columns = [
@@ -4250,7 +4272,7 @@ class TaskInstanceModelView(AirflowPrivilegeVerifierModelView):
     ]
 
     label_columns = {
-        'dag_run.execution_date': 'Execution Date',
+        'dag_run.execution_date': 'Logical Date',
     }
 
     search_columns = [
@@ -4510,10 +4532,11 @@ class DagDependenciesView(AirflowBaseView):
         }
 
 
-class CustomPermissionModelView(PermissionModelView):
+class ActionModelView(PermissionModelView):
     """Customize permission names for FAB's builtin PermissionModelView."""
 
-    class_permission_name = permissions.RESOURCE_PERMISSION
+    class_permission_name = permissions.RESOURCE_ACTION
+    route_base = "/actions"
     method_permission_name = {
         'list': 'read',
     }
@@ -4521,17 +4544,36 @@ class CustomPermissionModelView(PermissionModelView):
         permissions.ACTION_CAN_READ,
     ]
 
+    list_title = lazy_gettext("List Actions")
+    show_title = lazy_gettext("Show Action")
+    add_title = lazy_gettext("Add Action")
+    edit_title = lazy_gettext("Edit Action")
 
-class CustomPermissionViewModelView(PermissionViewModelView):
+    label_columns = {"name": lazy_gettext("Name")}
+
+
+class PermissionPairModelView(PermissionViewModelView):
     """Customize permission names for FAB's builtin PermissionViewModelView."""
 
-    class_permission_name = permissions.RESOURCE_PERMISSION_VIEW
+    class_permission_name = permissions.RESOURCE_PERMISSION
+    route_base = "/permissions"
     method_permission_name = {
         'list': 'read',
     }
     base_permissions = [
         permissions.ACTION_CAN_READ,
     ]
+
+    list_title = lazy_gettext("List Permissions")
+    show_title = lazy_gettext("Show Permission")
+    add_title = lazy_gettext("Add Permission")
+    edit_title = lazy_gettext("Edit Permission")
+
+    label_columns = {
+        "action": lazy_gettext("Action"),
+        "resource": lazy_gettext("Resource"),
+    }
+    list_columns = ["action", "resource"]
 
 
 class CustomResetMyPasswordView(ResetMyPasswordView):
@@ -4578,16 +4620,24 @@ class CustomRoleModelView(RoleModelView):
     ]
 
 
-class CustomViewMenuModelView(ViewMenuModelView):
+class ResourceModelView(ViewMenuModelView):
     """Customize permission names for FAB's builtin ViewMenuModelView."""
 
-    class_permission_name = permissions.RESOURCE_VIEW_MENU
+    class_permission_name = permissions.RESOURCE_RESOURCE
+    route_base = "/resources"
     method_permission_name = {
         'list': 'read',
     }
     base_permissions = [
         permissions.ACTION_CAN_READ,
     ]
+
+    list_title = lazy_gettext("List Resources")
+    show_title = lazy_gettext("Show Resource")
+    add_title = lazy_gettext("Add Resource")
+    edit_title = lazy_gettext("Edit Resource")
+
+    label_columns = {"name": lazy_gettext("Name")}
 
 
 class CustomUserInfoEditView(UserInfoEditView):
