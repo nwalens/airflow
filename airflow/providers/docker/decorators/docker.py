@@ -62,7 +62,7 @@ class _DockerDecoratedOperator(DecoratedOperator, DockerOperator):
     :type multiple_outputs: bool
     """
 
-    template_fields = ('op_args', 'op_kwargs')
+    template_fields: Iterable[str] = ('op_args', 'op_kwargs')
 
     # since we won't mutate the arguments, we should just do the shallow copy
     # there are some cases we can't deepcopy the objects (e.g protobuf).
@@ -123,7 +123,7 @@ class _DockerDecoratedOperator(DecoratedOperator, DockerOperator):
         return res
 
 
-T = TypeVar("T", bound=Callable)  # pylint: disable=invalid-name
+T = TypeVar("T", bound=Callable)
 
 
 def docker_task(

@@ -25,6 +25,7 @@ import warnings
 from abc import ABCMeta, abstractmethod
 from datetime import datetime, timedelta
 from inspect import signature
+from types import FunctionType
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -46,6 +47,7 @@ from typing import (
 
 import attr
 import jinja2
+import pendulum
 from dateutil.relativedelta import relativedelta
 from sqlalchemy.orm import Session
 from sqlalchemy.orm.exc import NoResultFound
@@ -69,10 +71,10 @@ from airflow.ti_deps.deps.trigger_rule_dep import TriggerRuleDep
 from airflow.triggers.base import BaseTrigger
 from airflow.utils import timezone
 from airflow.utils.edgemodifier import EdgeModifier
-from airflow.utils.helpers import validate_key
+from airflow.utils.helpers import render_template_as_native, render_template_to_string, validate_key
 from airflow.utils.log.logging_mixin import LoggingMixin
 from airflow.utils.operator_resources import Resources
-from airflow.utils.session import provide_session
+from airflow.utils.session import NEW_SESSION, provide_session
 from airflow.utils.trigger_rule import TriggerRule
 from airflow.utils.weight_rule import WeightRule
 
@@ -87,7 +89,7 @@ TaskStateChangeCallback = Callable[[Context], None]
 TaskPreExecuteHook = Callable[[Context], None]
 TaskPostExecuteHook = Callable[[Context, Any], None]
 
-T = TypeVar('T', bound=Callable)
+T = TypeVar('T', bound=FunctionType)
 
 
 class BaseOperatorMeta(abc.ABCMeta):
@@ -147,10 +149,10 @@ class BaseOperatorMeta(abc.ABCMeta):
             dag_args: Dict[str, Any] = {}
             dag_params: Dict[str, Any] = {}
 
-            dag = kwargs.get('dag') or DagContext.get_current_dag()
+            dag: Optional[DAG] = kwargs.get('dag') or DagContext.get_current_dag()
             if dag:
                 dag_args = copy.copy(dag.default_args) or {}
-                dag_params = copy.deepcopy(dag.params) or {}
+                dag_params = copy.deepcopy(dag.params.dump())
                 task_group = TaskGroupContext.get_current_task_group(dag)
                 if task_group:
                     dag_args.update(task_group.default_args)
@@ -483,6 +485,12 @@ class BaseOperator(Operator, LoggingMixin, TaskMixin, metaclass=BaseOperatorMeta
     # Set to True before calling execute method
     _lock_for_execution = False
 
+    _dag: Optional["DAG"] = None
+
+    # subdag parameter is only set for SubDagOperator.
+    # Setting it to None by default as other Operators do not have that field
+    subdag: Optional["DAG"] = None
+
     def __init__(
         self,
         task_id: str,
@@ -612,7 +620,8 @@ class BaseOperator(Operator, LoggingMixin, TaskMixin, metaclass=BaseOperatorMeta
         self.pool = Pool.DEFAULT_POOL_NAME if pool is None else pool
         self.pool_slots = pool_slots
         if self.pool_slots < 1:
-            raise AirflowException(f"pool slots for {self.task_id} in dag {dag.dag_id} cannot be less than 1")
+            dag_str = f" in dag {dag.dag_id}" if dag else ""
+            raise ValueError(f"pool slots for {self.task_id}{dag_str} cannot be less than 1")
         self.sla = sla
         self.execution_timeout = execution_timeout
         self.on_execute_callback = on_execute_callback
@@ -636,7 +645,8 @@ class BaseOperator(Operator, LoggingMixin, TaskMixin, metaclass=BaseOperatorMeta
                 self.log.debug("max_retry_delay isn't a timedelta object, assuming secs")
                 self.max_retry_delay = timedelta(seconds=max_retry_delay)
 
-        self.params = ParamsDict(params)
+        # At execution_time this becomes a normal dict
+        self.params: Union[ParamsDict, dict] = ParamsDict(params)
         if priority_weight is not None and not isinstance(priority_weight, int):
             raise AirflowException(
                 f"`priority_weight` for task '{self.task_id}' only accepts integers, "
@@ -673,15 +683,10 @@ class BaseOperator(Operator, LoggingMixin, TaskMixin, metaclass=BaseOperatorMeta
         # Private attributes
         self._upstream_task_ids: Set[str] = set()
         self._downstream_task_ids: Set[str] = set()
-        self._dag = None
 
-        self.dag = dag or DagContext.get_current_dag()
-
-        # subdag parameter is only set for SubDagOperator.
-        # Setting it to None by default as other Operators do not have that field
-        from airflow.models.dag import DAG
-
-        self.subdag: Optional[DAG] = None
+        dag = dag or DagContext.get_current_dag()
+        if dag:
+            self.dag = dag
 
         self._log = logging.getLogger("airflow.task.operators")
 
@@ -811,7 +816,7 @@ class BaseOperator(Operator, LoggingMixin, TaskMixin, metaclass=BaseOperatorMeta
     @property
     def dag(self) -> 'DAG':
         """Returns the Operator's DAG if set, otherwise raises an error"""
-        if self.has_dag():
+        if self._dag:
             return self._dag
         else:
             raise AirflowException(f'Operator {self} has not been assigned to a DAG yet')
@@ -840,7 +845,7 @@ class BaseOperator(Operator, LoggingMixin, TaskMixin, metaclass=BaseOperatorMeta
 
     def has_dag(self):
         """Returns True if the Operator has been assigned to a DAG."""
-        return getattr(self, '_dag', None) is not None
+        return self._dag is not None
 
     @property
     def dag_id(self) -> str:
@@ -1037,7 +1042,11 @@ class BaseOperator(Operator, LoggingMixin, TaskMixin, metaclass=BaseOperatorMeta
         self.__dict__ = state
         self._log = logging.getLogger("airflow.task.operators")
 
-    def render_template_fields(self, context: Dict, jinja_env: Optional[jinja2.Environment] = None) -> None:
+    def render_template_fields(
+        self,
+        context: Context,
+        jinja_env: Optional[jinja2.Environment] = None,
+    ) -> None:
         """
         Template all attributes listed in template_fields. Note this operation is irreversible.
 
@@ -1055,7 +1064,7 @@ class BaseOperator(Operator, LoggingMixin, TaskMixin, metaclass=BaseOperatorMeta
         self,
         parent: Any,
         template_fields: Iterable[str],
-        context: Dict,
+        context: Context,
         jinja_env: jinja2.Environment,
         seen_oids: Set,
     ) -> None:
@@ -1068,7 +1077,7 @@ class BaseOperator(Operator, LoggingMixin, TaskMixin, metaclass=BaseOperatorMeta
     def render_template(
         self,
         content: Any,
-        context: Dict,
+        context: Context,
         jinja_env: Optional[jinja2.Environment] = None,
         seen_oids: Optional[Set] = None,
     ) -> Any:
@@ -1095,11 +1104,14 @@ class BaseOperator(Operator, LoggingMixin, TaskMixin, metaclass=BaseOperatorMeta
         from airflow.models.xcom_arg import XComArg
 
         if isinstance(content, str):
-            if any(content.endswith(ext) for ext in self.template_ext):
-                # Content contains a filepath
-                return jinja_env.get_template(content).render(**context)
+            if any(content.endswith(ext) for ext in self.template_ext):  # Content contains a filepath.
+                template = jinja_env.get_template(content)
             else:
-                return jinja_env.from_string(content).render(**context)
+                template = jinja_env.from_string(content)
+            if self.has_dag() and self.dag.render_template_as_native_obj:
+                return render_template_as_native(template, context)
+            return render_template_to_string(template, context)
+
         elif isinstance(content, (XComArg, DagParam)):
             return content.resolve(context)
 
@@ -1128,7 +1140,7 @@ class BaseOperator(Operator, LoggingMixin, TaskMixin, metaclass=BaseOperatorMeta
             return content
 
     def _render_nested_template_fields(
-        self, content: Any, context: Dict, jinja_env: jinja2.Environment, seen_oids: Set
+        self, content: Any, context: Context, jinja_env: jinja2.Environment, seen_oids: Set
     ) -> None:
         if id(content) not in seen_oids:
             seen_oids.add(id(content))
@@ -1166,7 +1178,7 @@ class BaseOperator(Operator, LoggingMixin, TaskMixin, metaclass=BaseOperatorMeta
                 elif isinstance(content, str) and any(content.endswith(ext) for ext in self.template_ext):
                     env = self.get_template_env()
                     try:
-                        setattr(self, field, env.loader.get_source(env, content)[0])
+                        setattr(self, field, env.loader.get_source(env, content)[0])  # type: ignore
                     except Exception as e:
                         self.log.exception(e)
                 elif isinstance(content, list):
@@ -1174,7 +1186,7 @@ class BaseOperator(Operator, LoggingMixin, TaskMixin, metaclass=BaseOperatorMeta
                     for i, item in enumerate(content):
                         if isinstance(item, str) and any(item.endswith(ext) for ext in self.template_ext):
                             try:
-                                content[i] = env.loader.get_source(env, item)[0]
+                                content[i] = env.loader.get_source(env, item)[0]  # type: ignore
                             except Exception as e:
                                 self.log.exception(e)
         self.prepare_template()
@@ -1206,7 +1218,7 @@ class BaseOperator(Operator, LoggingMixin, TaskMixin, metaclass=BaseOperatorMeta
         end_date: Optional[datetime] = None,
         upstream: bool = False,
         downstream: bool = False,
-        session: Session = None,
+        session: Session = NEW_SESSION,
     ):
         """
         Clears the state of task instances associated with the task, following
@@ -1239,7 +1251,7 @@ class BaseOperator(Operator, LoggingMixin, TaskMixin, metaclass=BaseOperatorMeta
         self,
         start_date: Optional[datetime] = None,
         end_date: Optional[datetime] = None,
-        session: Session = None,
+        session: Session = NEW_SESSION,
     ) -> List[TaskInstance]:
         """
         Get a set of task instance related to this task for a specific date
@@ -1295,14 +1307,19 @@ class BaseOperator(Operator, LoggingMixin, TaskMixin, metaclass=BaseOperatorMeta
         ignore_ti_state: bool = False,
         mark_success: bool = False,
         test_mode: bool = False,
-        session: Session = None,
+        session: Session = NEW_SESSION,
     ) -> None:
         """Run a set of task instances for a date range."""
         from airflow.models import DagRun
         from airflow.utils.types import DagRunType
 
-        start_date = start_date or self.start_date
-        end_date = end_date or self.end_date or timezone.utcnow()
+        # Assertions for typing -- we need a dag, for this function, and when we have a DAG we are
+        # _guaranteed_ to have start_date (else we couldn't have been added to a DAG)
+        if TYPE_CHECKING:
+            assert self.start_date
+
+        start_date = pendulum.instance(start_date or self.start_date)
+        end_date = pendulum.instance(end_date or self.end_date or timezone.utcnow())
 
         for info in self.dag.iter_dagrun_infos_between(start_date, end_date, align=False):
             ignore_depends_on_past = info.logical_date == start_date and ignore_first_depends_on_past
@@ -1325,7 +1342,7 @@ class BaseOperator(Operator, LoggingMixin, TaskMixin, metaclass=BaseOperatorMeta
                     execution_date=info.logical_date,
                     data_interval=info.data_interval,
                 )
-                ti = TaskInstance(self, run_id=None)
+                ti = TaskInstance(self, run_id=dr.run_id)
                 ti.dag_run = dr
                 session.add(dr)
                 session.flush()

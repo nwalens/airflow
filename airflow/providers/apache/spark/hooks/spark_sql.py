@@ -17,7 +17,7 @@
 # under the License.
 #
 import subprocess
-from typing import TYPE_CHECKING, Any, List, Optional, Union
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
 from airflow.exceptions import AirflowException, AirflowNotFoundException
 from airflow.hooks.base import BaseHook
@@ -88,9 +88,10 @@ class SparkSqlHook(BaseHook):
             conn: "Optional[Connection]" = self.get_connection(conn_id)
         except AirflowNotFoundException:
             conn = None
-            options = {}
+            options: Dict = {}
         else:
-            options = conn.extra_dejson
+            if conn:
+                options = conn.extra_dejson
 
         # Set arguments to values set in Connection if not explicitly provided.
         if master is None:
@@ -182,7 +183,9 @@ class SparkSqlHook(BaseHook):
         """
         spark_sql_cmd = self._prepare_command(cmd)
 
-        self._sp = subprocess.Popen(spark_sql_cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, **kwargs)
+        self._sp = subprocess.Popen(
+            spark_sql_cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, universal_newlines=True, **kwargs
+        )
 
         for line in iter(self._sp.stdout):  # type: ignore
             self.log.info(line)
